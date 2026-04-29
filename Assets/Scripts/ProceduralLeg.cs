@@ -35,6 +35,15 @@ public class ProceduralLeg : MonoBehaviour
     public float raycastHeightOffset = 2f; // How high above the ideal spot to start the laser
     public float raycastDistance = 4f;
 
+    [Header("Body Orientation")]
+    public Transform bodyMesh;         // Drag your spider's visual body in here!
+    public float bodyHeight = 1.0f;    // How high the body hovers above the feet
+    public float tiltSpeed = 8.0f;
+
+    [Header("Anticipation & Collision")]
+    public float lookaheadDistance = 1.0f; // How far ahead the spider "looks"
+    public float bodyRadius = 0.5f;
+
     private Vector3 lastBodyPos;
     private float currentBodySpeed;
 
@@ -89,8 +98,40 @@ public class ProceduralLeg : MonoBehaviour
                 StartCoroutine(PerformStep(legs[i], isMoving));
             }
         }
+
+        CalculateBodyOrientation();
     }
 
+    void CalculateBodyOrientation()
+    {
+        if (bodyMesh == null || legs.Length == 0) return;
+
+        float averageFootY = 0f;
+        foreach (Leg leg in legs)
+        {
+            averageFootY += leg.ikTarget.position.y;
+        }
+        averageFootY /= legs.Length;
+
+        Vector3 targetPosition = bodyMesh.position;
+        targetPosition.y = averageFootY + bodyHeight;
+        bodyMesh.position = Vector3.Lerp(bodyMesh.position, targetPosition, Time.deltaTime * tiltSpeed);
+
+        Vector3 moveDirection = (transform.position - lastBodyPos).normalized;
+
+        if (currentBodySpeed < 0.1f)
+        {
+            moveDirection = transform.forward;
+        }
+
+        Vector3 rayOrigin = transform.position + (moveDirection * lookaheadDistance) + (Vector3.up * raycastHeightOffset);
+
+        if (Physics.SphereCast(rayOrigin, bodyRadius, Vector3.down, out RaycastHit hit, raycastDistance, groundLayer))
+        {
+            Quaternion targetRotation = Quaternion.FromToRotation(transform.up, hit.normal) * transform.rotation;
+            bodyMesh.rotation = Quaternion.Slerp(bodyMesh.rotation, targetRotation, Time.deltaTime * tiltSpeed);
+        }
+    }
     bool IsOppositeTeamStepping(int myTeam)
     {
         foreach (Leg leg in legs)
