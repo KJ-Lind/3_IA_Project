@@ -6,91 +6,88 @@ public class ProceduralLeg : MonoBehaviour
     [System.Serializable]
     public class Leg
     {
-        public Transform ikTarget;       // The stationary target on the floor
-        public Transform idealFootPos;   // The moving target attached to the body
-        public int team;                 // Team 0 or Team 1 (for alternating steps)
+        public Transform ikTarget;
+        public Transform idealFootPos;
+        public int team;
         [HideInInspector] public bool isStepping = false;
+        [HideInInspector] public Vector3 currentGroundTarget; // Store the raycast hit here
     }
 
-    [Header("Leg Setup")]
-    // 2. An array holding all our legs in one place
     public Leg[] legs;
 
-    [Header("Idle Settling Settings")]
-    public float idleThreshold = 0.2f;       // How strict the resting pose should be
-    public float timeBeforeIdleAdjust = 0.5f;// How long to stand still before adjusting
-    private float idleTimer = 0f;
+    [Header("Movement Thresholds")]
+    public float stepThreshold = 1.0f;
+    public float turnThreshold = 15f; // New: Degrees of rotation before stepping
+    public float idleThreshold = 0.2f;
 
     [Header("Walking Settings")]
-    public float stepThreshold = 1.0f;
     public float stepHeight = 0.5f;
     public float baseStepDuration = 0.25f;
-
-    [Header("Animation Polish")]
-    // This creates a visual graph in the Unity Inspector!
     public AnimationCurve stepEasing = AnimationCurve.EaseInOut(0, 0, 1, 1);
 
-    [Header("Terrain Detection")]
-    public LayerMask groundLayer;          // Tells the raycast what is safe to step on
-    public float raycastHeightOffset = 2f; // How high above the ideal spot to start the laser
+    [Header("Idle Settings")]
+    public float timeBeforeIdleAdjust = 0.5f; // How long to wait before settling
+    private float idleTimer = 0f;
+
+    [Header("Terrain")]
+    public LayerMask groundLayer;
+    public float raycastHeightOffset = 2f;
     public float raycastDistance = 4f;
 
-    [Header("Body Orientation")]
-    public Transform bodyMesh;         // Drag your spider's visual body in here!
-    public float bodyHeight = 1.0f;    // How high the body hovers above the feet
+    [Header("Body")]
+    public Transform bodyMesh;
+    public float bodyHeight = 1.0f;
     public float tiltSpeed = 8.0f;
-
-    [Header("Anticipation & Collision")]
-    public float lookaheadDistance = 1.0f; // How far ahead the spider "looks"
+    public float lookaheadDistance = 1.0f;
     public float bodyRadius = 0.5f;
 
     private Vector3 lastBodyPos;
+    private Quaternion lastBodyRot; // Track rotation
     private float currentBodySpeed;
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
+        lastBodyRot = transform.rotation;
         for (int i = 0; i < legs.Length; i++)
+        {
             legs[i].ikTarget.position = legs[i].idealFootPos.position;
+            legs[i].currentGroundTarget = legs[i].idealFootPos.position;
+        }
         lastBodyPos = transform.position;
     }
 
     // Update is called once per frame
     void Update()
     {
-
+        // 1. Calculate Linear and Angular movement
         currentBodySpeed = Vector3.Distance(transform.position, lastBodyPos) / Time.deltaTime;
-        lastBodyPos = transform.position;
+        float angleDelta = Quaternion.Angle(transform.rotation, lastBodyRot); // Difference in degrees
 
-        bool isMoving = currentBodySpeed > 0.1f;
+        bool isMoving = currentBodySpeed > 0.1f || angleDelta > 0.1f;
 
-        if (!isMoving)
-        {
-            idleTimer += Time.deltaTime; // Start counting up when stopped
-        }
-        else
-        {
-            idleTimer = 0f; // Reset the timer immediately if we start moving
-        }
+        if (!isMoving) idleTimer += Time.deltaTime;
+        else idleTimer = 0f;
 
         bool isIdle = idleTimer > timeBeforeIdleAdjust;
 
         for (int i = 0; i < legs.Length; i++)
         {
-            if (legs[i].isStepping) return;
-
+            if (legs[i].isStepping) continue;
             if (IsOppositeTeamStepping(legs[i].team)) continue;
 
+            // 2. Find the ground point based on the CURRENT position/rotation of the idealFootPos
             Vector3 rayOrigin = legs[i].idealFootPos.position + (Vector3.up * raycastHeightOffset);
-
             if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, raycastDistance, groundLayer))
             {
-                legs[i].idealFootPos.position = hit.point;
+                legs[i].currentGroundTarget = hit.point;
             }
 
-            float distance = Vector3.Distance(legs[i].ikTarget.position, legs[i].idealFootPos.position);
+            // 3. Check distance to current target
+            float distance = Vector3.Distance(legs[i].ikTarget.position, legs[i].currentGroundTarget);
 
-            bool needsWalkingStep = isMoving && distance > stepThreshold;
+            // Step if moving too far, OR if we rotated past the threshold
+            bool needsWalkingStep = isMoving && (distance > stepThreshold || angleDelta > turnThreshold);
             bool needsIdleStep = isIdle && distance > idleThreshold;
 
             if (needsWalkingStep || needsIdleStep)
@@ -100,6 +97,9 @@ public class ProceduralLeg : MonoBehaviour
         }
 
         CalculateBodyOrientation();
+
+        lastBodyPos = transform.position;
+        lastBodyRot = transform.rotation; // Update rotation for next frame
     }
 
     void CalculateBodyOrientation()
@@ -147,33 +147,32 @@ public class ProceduralLeg : MonoBehaviour
     IEnumerator PerformStep(Leg leg, bool isMoving)
     {
         leg.isStepping = true;
-
         Vector3 startPos = leg.ikTarget.position;
-        Vector3 endPos = leg.idealFootPos.position;
+
+        // We always target the latest ground hit
+        Vector3 endPos = leg.currentGroundTarget;
 
         float timeElapsed = 0;
-
         float speedMultiplier = isMoving ? Mathf.Clamp(currentBodySpeed, 1f, 10f) : 1f;
         float dynamicStepDuration = baseStepDuration / speedMultiplier;
-        dynamicStepDuration = Mathf.Max(dynamicStepDuration, 0.05f);
 
         while (timeElapsed < dynamicStepDuration)
         {
-
             float t = timeElapsed / dynamicStepDuration;
-
             float easedT = stepEasing.Evaluate(t);
 
-            Vector3 currentPos = Vector3.Lerp(startPos, endPos, easedT);
-
+            // Note: During rotation, 'leg.currentGroundTarget' is moving every frame. 
+            // To prevent the foot from "sliding" while in the air, we Lerp to the target 
+            // detected at the START of the step, or update it slightly.
+            Vector3 currentPos = Vector3.Lerp(startPos, leg.currentGroundTarget, easedT);
             currentPos.y += Mathf.Sin(easedT * Mathf.PI) * stepHeight;
 
             leg.ikTarget.position = currentPos;
-
             timeElapsed += Time.deltaTime;
             yield return null;
         }
-        leg.ikTarget.position = endPos;
+
+        leg.ikTarget.position = leg.currentGroundTarget;
         leg.isStepping = false;
     }
     private void OnDrawGizmos()
