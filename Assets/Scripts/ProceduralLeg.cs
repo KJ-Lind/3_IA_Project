@@ -110,7 +110,8 @@ public class ProceduralLeg : MonoBehaviour
     {
         if (bodyMesh == null || legs.Length == 0) return;
 
-        Vector3 avgFootPos = Vector3.zero;
+        // 1. Calculate Body Height based on average foot height
+        float averageFootY = 0f;
         foreach (Leg leg in legs)
         {
             avgFootPos += leg.ikTarget.position;
@@ -120,18 +121,48 @@ public class ProceduralLeg : MonoBehaviour
         Vector3 targetPosition = avgFootPos + surfaceNormal * bodyHeight;
         bodyMesh.position = Vector3.Lerp(bodyMesh.position, targetPosition, Time.deltaTime * tiltSpeed);
 
-        Vector3 moveDirection = (transform.position - lastBodyPos).normalized;
-        if (currentBodySpeed < 0.1f)
-        { 
-            moveDirection = transform.forward;
+        // 2. Calculate Body Tilt (Pitch and Roll) based on actual foot placements
+        Vector3 frontFeetAvg = Vector3.zero; int frontCount = 0;
+        Vector3 backFeetAvg = Vector3.zero; int backCount = 0;
+        Vector3 leftFeetAvg = Vector3.zero; int leftCount = 0;
+        Vector3 rightFeetAvg = Vector3.zero; int rightCount = 0;
+
+        foreach (Leg leg in legs)
+        {
+            // Determine where the leg is located relative to the crawler's center
+            Vector3 localHomePos = transform.InverseTransformPoint(leg.idealFootPos.position);
+
+            // Group feet by Z axis (Front/Back) and X axis (Left/Right)
+            if (localHomePos.z > 0) { frontFeetAvg += leg.ikTarget.position; frontCount++; }
+            else { backFeetAvg += leg.ikTarget.position; backCount++; }
+
+            if (localHomePos.x > 0) { rightFeetAvg += leg.ikTarget.position; rightCount++; }
+            else { leftFeetAvg += leg.ikTarget.position; leftCount++; }
         }
         Vector3 rayOrigin = transform.position + (moveDirection * lookaheadDistance) + (surfaceNormal * raycastHeightOffset);
 
-        if (Physics.SphereCast(rayOrigin, bodyRadius, -surfaceNormal, out RaycastHit hit, raycastDistance, groundLayer))
-        {
-            Quaternion targetRotation = Quaternion.FromToRotation(transform.up, hit.normal) * transform.rotation;
-            bodyMesh.rotation = Quaternion.Slerp(bodyMesh.rotation, targetRotation, Time.deltaTime * tiltSpeed);
-        }
+        // Average the grouped positions
+        if (frontCount > 0) frontFeetAvg /= frontCount;
+        if (backCount > 0) backFeetAvg /= backCount;
+        if (leftCount > 0) leftFeetAvg /= leftCount;
+        if (rightCount > 0) rightFeetAvg /= rightCount;
+
+        // Get the vectors connecting opposite sides of the crawler
+        Vector3 bodyForwardSlope = frontFeetAvg - backFeetAvg;
+        Vector3 bodyRightSlope = rightFeetAvg - leftFeetAvg;
+
+        // The Cross Product of these two slopes gives us the exact upward angle of the terrain under the feet
+        Vector3 terrainUp = Vector3.Cross(bodyForwardSlope, bodyRightSlope).normalized;
+
+        // Safety check to ensure the normal is always pointing up, not upside down
+        if (terrainUp.y < 0) terrainUp = -terrainUp;
+
+        // 3. Apply the rotation smoothly
+        // Project our forward direction onto the new terrain plane so the crawler doesn't pitch weirdly on steep slopes
+        Vector3 projectedForward = Vector3.ProjectOnPlane(transform.forward, terrainUp);
+
+        Quaternion targetRotation = Quaternion.LookRotation(projectedForward, terrainUp);
+        bodyMesh.rotation = Quaternion.Slerp(bodyMesh.rotation, targetRotation, Time.deltaTime * tiltSpeed);
     }
     bool IsOppositeTeamStepping(int myTeam)
     {
