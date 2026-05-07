@@ -114,11 +114,12 @@ public class ProceduralLeg : MonoBehaviour
         float averageFootY = 0f;
         foreach (Leg leg in legs)
         {
-            avgFootPos += leg.ikTarget.position;
+            averageFootY += leg.ikTarget.position.y;
         }
-        avgFootPos /= legs.Length;
+        averageFootY /= legs.Length;
 
-        Vector3 targetPosition = avgFootPos + surfaceNormal * bodyHeight;
+        Vector3 targetPosition = bodyMesh.position;
+        targetPosition.y = averageFootY + bodyHeight;
         bodyMesh.position = Vector3.Lerp(bodyMesh.position, targetPosition, Time.deltaTime * tiltSpeed);
 
         // 2. Calculate Body Tilt (Pitch and Roll) based on actual foot placements
@@ -139,7 +140,6 @@ public class ProceduralLeg : MonoBehaviour
             if (localHomePos.x > 0) { rightFeetAvg += leg.ikTarget.position; rightCount++; }
             else { leftFeetAvg += leg.ikTarget.position; leftCount++; }
         }
-        Vector3 rayOrigin = transform.position + (moveDirection * lookaheadDistance) + (surfaceNormal * raycastHeightOffset);
 
         // Average the grouped positions
         if (frontCount > 0) frontFeetAvg /= frontCount;
