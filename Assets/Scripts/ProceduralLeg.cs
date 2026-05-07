@@ -32,7 +32,8 @@ public class ProceduralLeg : MonoBehaviour
     [Header("Terrain")]
     public LayerMask groundLayer;
     public float raycastHeightOffset = 2f;
-    public float raycastDistance = 4f;
+    public float raycastDistance = 10f;
+    public float sphereRadius = 2.0f;
 
     [Header("Body")]
     public Transform bodyMesh;
@@ -45,7 +46,10 @@ public class ProceduralLeg : MonoBehaviour
     private Quaternion lastBodyRot; // Track rotation
     private float currentBodySpeed;
 
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
+    [Header("WallWalking")]
+    public float gravityAlignSpeed = 5.0f;
+    private Vector3 surfaceNormal = Vector3.up;
+
     void Start()
     {
         lastBodyRot = transform.rotation;
@@ -57,9 +61,10 @@ public class ProceduralLeg : MonoBehaviour
         lastBodyPos = transform.position;
     }
 
-    // Update is called once per frame
     void Update()
     {
+        UpdateSurfaceNormal();
+
         // 1. Calculate Linear and Angular movement
         currentBodySpeed = Vector3.Distance(transform.position, lastBodyPos) / Time.deltaTime;
         float angleDelta = Quaternion.Angle(transform.rotation, lastBodyRot); // Difference in degrees
@@ -77,8 +82,8 @@ public class ProceduralLeg : MonoBehaviour
             if (IsOppositeTeamStepping(legs[i].team)) continue;
 
             // 2. Find the ground point based on the CURRENT position/rotation of the idealFootPos
-            Vector3 rayOrigin = legs[i].idealFootPos.position + (Vector3.up * raycastHeightOffset);
-            if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, raycastDistance, groundLayer))
+            Vector3 rayOrigin = legs[i].idealFootPos.position + (-surfaceNormal * -raycastHeightOffset);
+            if (Physics.SphereCast(rayOrigin, 0.1f, -surfaceNormal, out RaycastHit hit, raycastDistance, groundLayer))
             {
                 legs[i].currentGroundTarget = hit.point;
             }
@@ -95,7 +100,6 @@ public class ProceduralLeg : MonoBehaviour
                 StartCoroutine(PerformStep(legs[i], isMoving));
             }
         }
-
         CalculateBodyOrientation();
 
         lastBodyPos = transform.position;
@@ -106,27 +110,24 @@ public class ProceduralLeg : MonoBehaviour
     {
         if (bodyMesh == null || legs.Length == 0) return;
 
-        float averageFootY = 0f;
+        Vector3 avgFootPos = Vector3.zero;
         foreach (Leg leg in legs)
         {
-            averageFootY += leg.ikTarget.position.y;
+            avgFootPos += leg.ikTarget.position;
         }
-        averageFootY /= legs.Length;
+        avgFootPos /= legs.Length;
 
-        Vector3 targetPosition = bodyMesh.position;
-        targetPosition.y = averageFootY + bodyHeight;
+        Vector3 targetPosition = avgFootPos + surfaceNormal * bodyHeight;
         bodyMesh.position = Vector3.Lerp(bodyMesh.position, targetPosition, Time.deltaTime * tiltSpeed);
 
         Vector3 moveDirection = (transform.position - lastBodyPos).normalized;
-
         if (currentBodySpeed < 0.1f)
-        {
+        { 
             moveDirection = transform.forward;
         }
+        Vector3 rayOrigin = transform.position + (moveDirection * lookaheadDistance) + (surfaceNormal * raycastHeightOffset);
 
-        Vector3 rayOrigin = transform.position + (moveDirection * lookaheadDistance) + (Vector3.up * raycastHeightOffset);
-
-        if (Physics.SphereCast(rayOrigin, bodyRadius, Vector3.down, out RaycastHit hit, raycastDistance, groundLayer))
+        if (Physics.SphereCast(rayOrigin, bodyRadius, -surfaceNormal, out RaycastHit hit, raycastDistance, groundLayer))
         {
             Quaternion targetRotation = Quaternion.FromToRotation(transform.up, hit.normal) * transform.rotation;
             bodyMesh.rotation = Quaternion.Slerp(bodyMesh.rotation, targetRotation, Time.deltaTime * tiltSpeed);
@@ -165,7 +166,7 @@ public class ProceduralLeg : MonoBehaviour
             // To prevent the foot from "sliding" while in the air, we Lerp to the target 
             // detected at the START of the step, or update it slightly.
             Vector3 currentPos = Vector3.Lerp(startPos, leg.currentGroundTarget, easedT);
-            currentPos.y += Mathf.Sin(easedT * Mathf.PI) * stepHeight;
+            currentPos += surfaceNormal * (Mathf.Sin(easedT * Mathf.PI) * stepHeight);
 
             leg.ikTarget.position = currentPos;
             timeElapsed += Time.deltaTime;
@@ -183,9 +184,24 @@ public class ProceduralLeg : MonoBehaviour
         {
             if (leg.idealFootPos != null)
             {
-                Vector3 rayOrigin = leg.idealFootPos.position + (Vector3.up * raycastHeightOffset);
-                Gizmos.DrawLine(rayOrigin, rayOrigin + (Vector3.down * raycastDistance));
+                Vector3 normal = Application.isPlaying ? surfaceNormal : Vector3.up ;
+                Vector3 rayCastOrigin = leg.idealFootPos.position + (Vector3.up * raycastHeightOffset);
+                Vector3 SphereOrigin = leg.idealFootPos.position;
+                Gizmos.DrawLine(rayCastOrigin, rayCastOrigin + (-normal * raycastDistance)); // He cambiado donde se printea la sphere. TODO: ver si tengo que cambiar de donde sale el sphereCast
+                Gizmos.DrawWireSphere(SphereOrigin, sphereRadius);
             }
+        }
+    }
+
+    void UpdateSurfaceNormal()
+    {
+        Vector3 castOrigin = transform.position + surfaceNormal * raycastHeightOffset;
+
+        if (Physics.SphereCast(castOrigin, bodyRadius, -surfaceNormal, out RaycastHit hit,
+            raycastDistance, groundLayer))
+        {
+            surfaceNormal = Vector3.Lerp(surfaceNormal, hit.normal, Time.deltaTime * gravityAlignSpeed);
+            surfaceNormal.Normalize();
         }
     }
 }
