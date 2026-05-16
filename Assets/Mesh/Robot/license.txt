@@ -1,0 +1,11 @@
+Model Information:
+* title:	Fujin
+* source:	https://sketchfab.com/3d-models/fujin-ceb84ae0207a4491ba6b29c6498b78fb
+* author:	photon (that one larry) (https://sketchfab.com/Professor_E12)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Fujin" (https://sketchfab.com/3d-models/fujin-ceb84ae0207a4491ba6b29c6498b78fb) by photon (that one larry) (https://sketchfab.com/Professor_E12) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
