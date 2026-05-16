@@ -1,5 +1,6 @@
 using System.Collections;
 using UnityEngine;
+using static ProceduralLeg;
 
 public class ProceduralLeg : MonoBehaviour
 {
@@ -9,15 +10,20 @@ public class ProceduralLeg : MonoBehaviour
         public Transform ikTarget;
         public Transform idealFootPos;
         public int team;
+
         [HideInInspector] public bool isStepping = false;
-        [HideInInspector] public Vector3 currentGroundTarget; // Store the raycast hit here
+        [HideInInspector] public Vector3 currentGroundTarget;
+
+        [HideInInspector] public float stepProgress = 0f;
+        [HideInInspector] public Vector3 stepStartPos;
+        [HideInInspector] public Vector3 stepEndPos;
     }
 
     public Leg[] legs;
 
     [Header("Movement Thresholds")]
     public float stepThreshold = 1.0f;
-    public float turnThreshold = 15f; // New: Degrees of rotation before stepping
+    public float turnThreshold = 15f;
     public float idleThreshold = 0.2f;
 
     [Header("Walking Settings")]
@@ -26,7 +32,7 @@ public class ProceduralLeg : MonoBehaviour
     public AnimationCurve stepEasing = AnimationCurve.EaseInOut(0, 0, 1, 1);
 
     [Header("Idle Settings")]
-    public float timeBeforeIdleAdjust = 0.5f; // How long to wait before settling
+    public float timeBeforeIdleAdjust = 0.5f;
     private float idleTimer = 0f;
 
     [Header("Terrain")]
@@ -43,7 +49,7 @@ public class ProceduralLeg : MonoBehaviour
     public float bodyRadius = 0.5f;
 
     private Vector3 lastBodyPos;
-    private Quaternion lastBodyRot; // Track rotation
+    private Quaternion lastBodyRot;
     private float currentBodySpeed;
 
     [Header("WallWalking")]
@@ -61,13 +67,47 @@ public class ProceduralLeg : MonoBehaviour
         lastBodyPos = transform.position;
     }
 
+
+    private void LateUpdate()
+    {
+        float speedMultiplier = currentBodySpeed > 0.1f ? Mathf.Clamp(currentBodySpeed, 1.0f, 10.0f) : 1.0f;
+        float dynamicStepDuration = baseStepDuration / speedMultiplier;
+
+        for (int i = 0; i < legs.Length; i++)
+        {
+            if (!legs[i].isStepping) continue;
+            legs[i].stepProgress += Time.deltaTime / dynamicStepDuration;
+
+            if (legs[i].stepProgress >= 1f)
+            {
+                legs[i].isStepping = false;
+                legs[i].ikTarget.position = legs[i].stepEndPos;
+                continue;
+            }
+
+            float easedT = stepEasing.Evaluate(legs[i].stepProgress);
+
+            Vector3 currentPos = Vector3.Lerp(legs[i].stepStartPos, legs[i].stepEndPos, easedT);
+
+            currentPos += surfaceNormal * (Mathf.Sin(easedT * Mathf.PI) * stepHeight);
+
+            legs[i].ikTarget.position = currentPos;
+
+            Vector3 projectedForward = Vector3.ProjectOnPlane(transform.forward, surfaceNormal).normalized;
+            if (projectedForward != Vector3.zero)
+            {
+                Quaternion targetRot = Quaternion.LookRotation(projectedForward, surfaceNormal);
+                legs[i].ikTarget.rotation = Quaternion.Slerp(legs[i].ikTarget.rotation, targetRot, easedT);
+            }
+        }
+    }
+
     void Update()
     {
         UpdateSurfaceNormal();
 
-        // 1. Calculate Linear and Angular movement
         currentBodySpeed = Vector3.Distance(transform.position, lastBodyPos) / Time.deltaTime;
-        float angleDelta = Quaternion.Angle(transform.rotation, lastBodyRot); // Difference in degrees
+        float angleDelta = Quaternion.Angle(transform.rotation, lastBodyRot);
 
         bool isMoving = currentBodySpeed > 0.1f || angleDelta > 0.1f;
 
@@ -75,36 +115,46 @@ public class ProceduralLeg : MonoBehaviour
         else idleTimer = 0f;
 
         bool isIdle = idleTimer > timeBeforeIdleAdjust;
+        bool[] teamWantsStep = new bool[2];
+
+
+        for (int i = 0; i < legs.Length; i++)
+        {
+            Vector3 rayOrigin = legs[i].idealFootPos.position + (surfaceNormal * raycastHeightOffset);
+            if (Physics.SphereCast(rayOrigin, sphereRadius, -surfaceNormal, out RaycastHit hit, raycastDistance, groundLayer))
+            {
+                legs[i].currentGroundTarget = hit.point;
+            }
+
+            float distance = Vector3.Distance(legs[i].ikTarget.position, legs[i].currentGroundTarget);
+            bool needsWalkingStep = isMoving && (distance > stepThreshold);
+            bool needsIdleStep = isIdle && distance > idleThreshold;
+
+            if (needsWalkingStep || needsIdleStep)
+            {
+                teamWantsStep[legs[i].team] = true;
+            }
+        }
 
         for (int i = 0; i < legs.Length; i++)
         {
             if (legs[i].isStepping) continue;
             if (IsOppositeTeamStepping(legs[i].team)) continue;
 
-            // 2. Find the ground point based on the CURRENT position/rotation of the idealFootPos
-            Vector3 rayOrigin = legs[i].idealFootPos.position + (surfaceNormal * raycastHeightOffset);
- 
-            if (Physics.SphereCast(rayOrigin, 0.1f, -surfaceNormal, out RaycastHit hit, raycastDistance, groundLayer))
+
+            if (teamWantsStep[legs[i].team])
             {
-                legs[i].currentGroundTarget = hit.point;
-            }
-
-            // 3. Check distance to current target
-            float distance = Vector3.Distance(legs[i].ikTarget.position, legs[i].currentGroundTarget);
-
-            // Step if moving too far, OR if we rotated past the threshold
-            bool needsWalkingStep = isMoving && (distance > stepThreshold || angleDelta > turnThreshold);
-            bool needsIdleStep = isIdle && distance > idleThreshold;
-
-            if (needsWalkingStep || needsIdleStep)
-            {
-                StartCoroutine(PerformStep(legs[i], isMoving));
+                legs[i].isStepping = true;
+                legs[i].stepProgress = 0f;
+                legs[i].stepStartPos = legs[i].ikTarget.position;
+                legs[i].stepEndPos = legs[i].currentGroundTarget;
             }
         }
+
         CalculateBodyOrientation();
 
         lastBodyPos = transform.position;
-        lastBodyRot = transform.rotation; // Update rotation for next frame
+        lastBodyRot = transform.rotation;
     }
 
     void CalculateBodyOrientation()
@@ -121,16 +171,16 @@ public class ProceduralLeg : MonoBehaviour
         Vector3 targetPosition = avgFootPos + surfaceNormal * bodyHeight;
         bodyMesh.position = Vector3.Lerp(bodyMesh.position, targetPosition, Time.deltaTime * tiltSpeed);
 
-        Vector3 moveDirection = (transform.position - lastBodyPos).normalized;
-        if (currentBodySpeed < 0.1f)
-        {
-            moveDirection = transform.forward;
-        }
-        Vector3 rayOrigin = transform.position + (moveDirection * lookaheadDistance) + (surfaceNormal * raycastHeightOffset);
+        Vector3 projectedForward = Vector3.ProjectOnPlane(transform.forward, surfaceNormal).normalized;
 
-        if (Physics.SphereCast(rayOrigin, bodyRadius, -surfaceNormal, out RaycastHit hit, raycastDistance, groundLayer))
+        if (projectedForward.sqrMagnitude < 0.01f)
         {
-            Quaternion targetRotation = Quaternion.FromToRotation(transform.up, hit.normal) * transform.rotation;
+            projectedForward = Vector3.ProjectOnPlane(transform.up, surfaceNormal).normalized;
+        }
+
+        if (projectedForward != Vector3.zero)
+        {
+            Quaternion targetRotation = Quaternion.LookRotation(projectedForward, surfaceNormal);
             bodyMesh.rotation = Quaternion.Slerp(bodyMesh.rotation, targetRotation, Time.deltaTime * tiltSpeed);
         }
     }
@@ -140,43 +190,43 @@ public class ProceduralLeg : MonoBehaviour
         {
             if (leg.team != myTeam && leg.isStepping)
             {
-                return true; // Someone on the other team is moving! Freeze!
+                return true;
             }
         }
         return false;
     }
 
-    IEnumerator PerformStep(Leg leg, bool isMoving)
-    {
-        leg.isStepping = true;
-        Vector3 startPos = leg.ikTarget.position;
+    //IEnumerator PerformStep(Leg leg, bool isMoving)
+    //{
+    //    leg.isStepping = true;
+    //    Vector3 startPos = leg.ikTarget.position;
 
-        // We always target the latest ground hit
-        Vector3 endPos = leg.currentGroundTarget;
+    //    // We always target the latest ground hit
+    //    Vector3 endPos = leg.currentGroundTarget;
 
-        float timeElapsed = 0;
-        float speedMultiplier = isMoving ? Mathf.Clamp(currentBodySpeed, 1f, 10f) : 1f;
-        float dynamicStepDuration = baseStepDuration / speedMultiplier;
+    //    float timeElapsed = 0;
+    //    float speedMultiplier = isMoving ? Mathf.Clamp(currentBodySpeed, 1f, 10f) : 1f;
+    //    float dynamicStepDuration = baseStepDuration / speedMultiplier;
 
-        while (timeElapsed < dynamicStepDuration)
-        {
-            float t = timeElapsed / dynamicStepDuration;
-            float easedT = stepEasing.Evaluate(t);
+    //    while (timeElapsed < dynamicStepDuration)
+    //    {
+    //        float t = timeElapsed / dynamicStepDuration;
+    //        float easedT = stepEasing.Evaluate(t);
 
-            // Note: During rotation, 'leg.currentGroundTarget' is moving every frame. 
-            // To prevent the foot from "sliding" while in the air, we Lerp to the target 
-            // detected at the START of the step, or update it slightly.
-            Vector3 currentPos = Vector3.Lerp(startPos, leg.currentGroundTarget, easedT);
-            currentPos += surfaceNormal * (Mathf.Sin(easedT * Mathf.PI) * stepHeight);
+    //        // Note: During rotation, 'leg.currentGroundTarget' is moving every frame. 
+    //        // To prevent the foot from "sliding" while in the air, we Lerp to the target 
+    //        // detected at the START of the step, or update it slightly.
+    //        Vector3 currentPos = Vector3.Lerp(startPos, endPos, easedT);
+    //        currentPos += surfaceNormal * (Mathf.Sin(easedT * Mathf.PI) * stepHeight);
 
-            leg.ikTarget.position = currentPos;
-            timeElapsed += Time.deltaTime;
-            yield return null;
-        }
+    //        leg.ikTarget.position = currentPos;
+    //        timeElapsed += Time.deltaTime;
+    //        yield return null;
+    //    }
 
-        leg.ikTarget.position = leg.currentGroundTarget;
-        leg.isStepping = false;
-    }
+    //    leg.ikTarget.position = leg.currentGroundTarget;
+    //    leg.isStepping = false;
+    //}
     private void OnDrawGizmos()
     {
         if (legs == null) return;
@@ -196,13 +246,27 @@ public class ProceduralLeg : MonoBehaviour
 
     void UpdateSurfaceNormal()
     {
-        Vector3 castOrigin = transform.position + surfaceNormal * raycastHeightOffset;
+        Vector3 moveDirection = currentBodySpeed > 0.1f ? (transform.position - lastBodyPos).normalized : transform.forward;
 
-        if (Physics.SphereCast(castOrigin, bodyRadius, -surfaceNormal, out RaycastHit hit,
-            raycastDistance, groundLayer))
+        // Down ray cast for floor detection
+        Vector3 downOrigin = transform.position + (surfaceNormal * raycastHeightOffset);
+        bool hitDown = Physics.SphereCast(downOrigin, bodyRadius, -surfaceNormal, out RaycastHit downHit, raycastDistance, groundLayer);
+
+        //Forward ray cast for 90º wall detection
+        Vector3 forwardOrigin = transform.position + (surfaceNormal * 0.5f);
+        bool hitForward = Physics.SphereCast(forwardOrigin, bodyRadius, moveDirection, out RaycastHit forwardHit, lookaheadDistance + 0.5f, groundLayer);
+
+        Vector3 targetNormal = surfaceNormal;
+
+        if (hitForward)
         {
-            surfaceNormal = Vector3.Lerp(surfaceNormal, hit.normal, Time.deltaTime * gravityAlignSpeed);
-            surfaceNormal.Normalize();
+            targetNormal = forwardHit.normal;
         }
+        else if (hitDown)
+        {
+            targetNormal = downHit.normal;
+        }
+
+        surfaceNormal = Vector3.Lerp(surfaceNormal, targetNormal, Time.deltaTime * gravityAlignSpeed).normalized;
     }
 }
