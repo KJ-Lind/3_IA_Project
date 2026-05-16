@@ -8,14 +8,7 @@ public class SpiderController : MonoBehaviour
     public float moveSpeed = 5f;
     public float turnSpeed = 150f;
 
-    private Rigidbody rb;
     private Vector2 inputDirection; // Stores WASD data
-
-    void Start()
-    {
-        rb = GetComponent<Rigidbody>();
-        rb.isKinematic = true;
-    }
 
     void Update()
     {

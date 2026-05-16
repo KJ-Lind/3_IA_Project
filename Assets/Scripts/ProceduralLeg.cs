@@ -238,7 +238,10 @@ public class ProceduralLeg : MonoBehaviour
                 Vector3 normal = Application.isPlaying ? surfaceNormal : Vector3.up;
                 Vector3 rayCastOrigin = leg.idealFootPos.position + (Vector3.up * raycastHeightOffset);
                 Vector3 SphereOrigin = leg.idealFootPos.position + (surfaceNormal * raycastHeightOffset);
+                Vector3 forwardOrigin = transform.position + (surfaceNormal * 0.5f);
                 Gizmos.DrawLine(rayCastOrigin, rayCastOrigin + (-normal * raycastDistance));
+                Gizmos.DrawWireSphere(forwardOrigin, bodyRadius);
+
                 Gizmos.DrawWireSphere(SphereOrigin, sphereRadius);
             }
         }
