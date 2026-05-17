@@ -533,7 +533,7 @@ MonoBehaviour:
     stepEndPos: {x: 0, y: 0, z: 0}
     currentStepDuration: 0
     currentStepHeight: 0
-  walkStepDuration: 1
+  walkStepDuration: 2
   walkStepHeight: 1
   walkStepThreshold: 1
   stepEasing:
@@ -562,13 +562,13 @@ MonoBehaviour:
     m_RotationOrder: 4
   slowTurnDuration: 0.2
   fastTurnDuration: 0.08
-  turnStepHeight: 0.2
+  turnStepHeight: 0.8
   wideTurnThreshold: 0.6
   tightTurnThreshold: 0.2
   maxTurnVelocity: 120
   idleStepDuration: 0.5
   idleStepHeight: 0.3
-  idleThreshold: 0.1
+  idleThreshold: 0.5
   timeBeforeIdleAdjust: 1.5
   groundLayer:
     serializedVersion: 2
@@ -577,7 +577,7 @@ MonoBehaviour:
   raycastDistance: 6
   sphereRadius: 1
   bodyMesh: {fileID: 405705811}
-  bodyHeight: 1.5
+  bodyHeight: 1.7
   tiltSpeed: 3
   lookaheadDistance: 2
   bodyRadius: 2.5
