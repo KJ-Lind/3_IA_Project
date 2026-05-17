@@ -17,21 +17,32 @@ public class ProceduralLeg : MonoBehaviour
         [HideInInspector] public float stepProgress = 0f;
         [HideInInspector] public Vector3 stepStartPos;
         [HideInInspector] public Vector3 stepEndPos;
+
+        [HideInInspector] public float currentStepDuration;
+        [HideInInspector] public float currentStepHeight;
     }
 
     public Leg[] legs;
 
-    [Header("Movement Thresholds")]
-    public float stepThreshold = 1.0f;
-    public float turnThreshold = 15f;
-    public float idleThreshold = 0.2f;
 
     [Header("Walking Settings")]
-    public float stepHeight = 0.5f;
-    public float baseStepDuration = 0.25f;
+    public float walkStepDuration = 0.25f;
+    public float walkStepHeight = 0.5f;
+    public float walkStepThreshold = 1.0f;
     public AnimationCurve stepEasing = AnimationCurve.EaseInOut(0, 0, 1, 1);
 
+    [Header("Turning Settings")]
+    public float slowTurnDuration = 0.2f;       // Step time when turning gently
+    public float fastTurnDuration = 0.08f;      // Step time when spinning violently
+    public float turnStepHeight = 0.2f;
+    public float wideTurnThreshold = 0.6f;      // Step distance when turning gently
+    public float tightTurnThreshold = 0.2f;     // Step distance when spinning violently
+    public float maxTurnVelocity = 120f;
+
     [Header("Idle Settings")]
+    public float idleStepDuration = 0.5f;  // Slower, relaxed step for adjusting
+    public float idleStepHeight = 0.3f;
+    public float idleThreshold = 0.2f;
     public float timeBeforeIdleAdjust = 0.5f;
     private float idleTimer = 0f;
 
@@ -49,12 +60,23 @@ public class ProceduralLeg : MonoBehaviour
     public float bodyRadius = 0.5f;
 
     private Vector3 lastBodyPos;
-    private Quaternion lastBodyRot;
     private float currentBodySpeed;
 
     [Header("WallWalking")]
     public float gravityAlignSpeed = 5.0f;
     private Vector3 surfaceNormal = Vector3.up;
+
+    [Header("Turning Juice")]
+    public float bankMultiplier = 0.2f;
+    public float maxBankAngle = 25f;
+    public float bankSmoothSpeed = 8f;
+
+    private float currentBank = 0f;
+    private float currentYawVelocity;
+    private Quaternion lastBodyRot;
+
+
+    private int lastSteppingTeam = -1;
 
     void Start()
     {
@@ -70,26 +92,31 @@ public class ProceduralLeg : MonoBehaviour
 
     private void LateUpdate()
     {
-        float speedMultiplier = currentBodySpeed > 0.1f ? Mathf.Clamp(currentBodySpeed, 1.0f, 10.0f) : 1.0f;
-        float dynamicStepDuration = baseStepDuration / speedMultiplier;
-
         for (int i = 0; i < legs.Length; i++)
         {
             if (!legs[i].isStepping) continue;
-            legs[i].stepProgress += Time.deltaTime / dynamicStepDuration;
+
+            // Advance progress based on the CACHED duration for this specific step
+            legs[i].stepProgress += Time.deltaTime / legs[i].currentStepDuration;
 
             if (legs[i].stepProgress >= 1f)
             {
                 legs[i].isStepping = false;
                 legs[i].ikTarget.position = legs[i].stepEndPos;
+
+                Vector3 finalProjectedForward = Vector3.ProjectOnPlane(transform.forward, surfaceNormal).normalized;
+                if (finalProjectedForward != Vector3.zero)
+                {
+                    legs[i].ikTarget.rotation = Quaternion.LookRotation(finalProjectedForward, surfaceNormal);
+                }
                 continue;
             }
 
             float easedT = stepEasing.Evaluate(legs[i].stepProgress);
-
             Vector3 currentPos = Vector3.Lerp(legs[i].stepStartPos, legs[i].stepEndPos, easedT);
 
-            currentPos += surfaceNormal * (Mathf.Sin(easedT * Mathf.PI) * stepHeight);
+            // Apply the CACHED step height for this specific step
+            currentPos += surfaceNormal * (Mathf.Sin(easedT * Mathf.PI) * legs[i].currentStepHeight);
 
             legs[i].ikTarget.position = currentPos;
 
@@ -107,17 +134,24 @@ public class ProceduralLeg : MonoBehaviour
         UpdateSurfaceNormal();
 
         currentBodySpeed = Vector3.Distance(transform.position, lastBodyPos) / Time.deltaTime;
-        float angleDelta = Quaternion.Angle(transform.rotation, lastBodyRot);
+        float deltaYaw = Mathf.DeltaAngle(lastBodyRot.eulerAngles.y, transform.rotation.eulerAngles.y);
+        currentYawVelocity = deltaYaw / Time.deltaTime;
 
-        bool isMoving = currentBodySpeed > 0.1f || angleDelta > 0.1f;
+        // Determine the core state of the crawler this frame
+        bool isWalking = currentBodySpeed > 0.05f;
+        bool isTurningInPlace = !isWalking && Mathf.Abs(currentYawVelocity) > 2f;
+        bool isIdle = !isWalking && !isTurningInPlace;
 
-        if (!isMoving) idleTimer += Time.deltaTime;
+        float turnIntensity = Mathf.Clamp01(Mathf.Abs(currentYawVelocity) / maxTurnVelocity);
+        float dynamicTurnThreshold = Mathf.Lerp(wideTurnThreshold, tightTurnThreshold, turnIntensity);
+
+        if (isIdle) idleTimer += Time.deltaTime;
         else idleTimer = 0f;
 
-        bool isIdle = idleTimer > timeBeforeIdleAdjust;
+        bool isLongIdle = idleTimer > timeBeforeIdleAdjust;
         bool[] teamWantsStep = new bool[2];
 
-
+        // 1. EVALUATE DISTANCE THRESHOLDS BASED ON STATE
         for (int i = 0; i < legs.Length; i++)
         {
             Vector3 rayOrigin = legs[i].idealFootPos.position + (surfaceNormal * raycastHeightOffset);
@@ -127,27 +161,73 @@ public class ProceduralLeg : MonoBehaviour
             }
 
             float distance = Vector3.Distance(legs[i].ikTarget.position, legs[i].currentGroundTarget);
-            bool needsWalkingStep = isMoving && (distance > stepThreshold);
-            bool needsIdleStep = isIdle && distance > idleThreshold;
 
-            if (needsWalkingStep || needsIdleStep)
+            bool wantsStep = false;
+
+            // Strict threshold gating based on current state
+            if (isWalking && distance > walkStepThreshold) wantsStep = true;
+            else if (isTurningInPlace && distance > dynamicTurnThreshold) wantsStep = true;
+            else if (isIdle && idleTimer > timeBeforeIdleAdjust && distance > idleThreshold) wantsStep = true;
+
+            if (wantsStep)
             {
                 teamWantsStep[legs[i].team] = true;
             }
         }
-
-        for (int i = 0; i < legs.Length; i++)
+        bool isAnyLegStepping = false;
+        foreach (var leg in legs)
         {
-            if (legs[i].isStepping) continue;
-            if (IsOppositeTeamStepping(legs[i].team)) continue;
+            if (leg.isStepping) isAnyLegStepping = true;
+        }
 
+        // Only allow a new team to step if NO legs are currently mid-air
+        if (!isAnyLegStepping)
+        {
+            int teamToStep = -1;
 
-            if (teamWantsStep[legs[i].team])
+            // Anti-Starvation: Force alternation if both teams are queued to step
+            if (teamWantsStep[0] && teamWantsStep[1])
             {
-                legs[i].isStepping = true;
-                legs[i].stepProgress = 0f;
-                legs[i].stepStartPos = legs[i].ikTarget.position;
-                legs[i].stepEndPos = legs[i].currentGroundTarget;
+                teamToStep = lastSteppingTeam == 0 ? 1 : 0;
+            }
+            else if (teamWantsStep[0]) teamToStep = 0;
+            else if (teamWantsStep[1]) teamToStep = 1;
+
+            // Trigger the winning team
+            if (teamToStep != -1)
+            {
+                for (int i = 0; i < legs.Length; i++)
+                {
+                    if (legs[i].team == teamToStep)
+                    {
+                        legs[i].isStepping = true;
+                        legs[i].stepProgress = 0f;
+                        legs[i].stepStartPos = legs[i].ikTarget.position;
+                        legs[i].stepEndPos = legs[i].currentGroundTarget;
+
+                        // Apply specific cached settings based on state
+                        if (isTurningInPlace)
+                        {
+                            legs[i].currentStepDuration = Mathf.Lerp(slowTurnDuration, fastTurnDuration, turnIntensity);
+                            legs[i].currentStepHeight = turnStepHeight;
+                        }
+                        else if (isIdle) // <-- NEW IDLE LOGIC
+                        {
+                            legs[i].currentStepDuration = idleStepDuration;
+                            legs[i].currentStepHeight = idleStepHeight;
+                        }
+                        else
+                        {
+                            // If walking or idle, use standard walking parameters
+                            float speedMultiplier = isWalking ? Mathf.Clamp(currentBodySpeed, 1.0f, 10.0f) : 1.0f;
+                            legs[i].currentStepDuration = walkStepDuration / speedMultiplier;
+                            legs[i].currentStepHeight = walkStepHeight;
+                        }
+                    }
+                }
+
+                lastSteppingTeam = teamToStep; // Remember who stepped
+                if (isIdle) idleTimer = 0f;    // Reset the idle timer ONLY if we successfully settled our feet
             }
         }
 
@@ -161,6 +241,9 @@ public class ProceduralLeg : MonoBehaviour
     {
         if (bodyMesh == null || legs.Length == 0) return;
 
+        float speedMultiplier = currentBodySpeed > 0.1f ? Mathf.Clamp(currentBodySpeed, 1.0f, 5.0f) : 1.0f;
+        float dynamicTiltSpeed = tiltSpeed * speedMultiplier;
+
         Vector3 avgFootPos = Vector3.zero;
         foreach (Leg leg in legs)
         {
@@ -169,7 +252,7 @@ public class ProceduralLeg : MonoBehaviour
         avgFootPos /= legs.Length;
 
         Vector3 targetPosition = avgFootPos + surfaceNormal * bodyHeight;
-        bodyMesh.position = Vector3.Lerp(bodyMesh.position, targetPosition, Time.deltaTime * tiltSpeed);
+        bodyMesh.position = Vector3.Lerp(bodyMesh.position, targetPosition, Time.deltaTime * dynamicTiltSpeed);
 
         Vector3 projectedForward = Vector3.ProjectOnPlane(transform.forward, surfaceNormal).normalized;
 
@@ -181,20 +264,31 @@ public class ProceduralLeg : MonoBehaviour
         if (projectedForward != Vector3.zero)
         {
             Quaternion targetRotation = Quaternion.LookRotation(projectedForward, surfaceNormal);
+
+            float targetBank = 0f;
+            if (currentBodySpeed > 0.5f)
+            {
+                targetBank = Mathf.Clamp(-currentYawVelocity * bankMultiplier, -maxBankAngle, maxBankAngle);
+            }
+            currentBank = Mathf.Lerp(currentBank, targetBank, Time.deltaTime * bankSmoothSpeed);
+
+            Quaternion rollOffset = Quaternion.AngleAxis(currentBank, projectedForward);
+            targetRotation = rollOffset * targetRotation;
+
             bodyMesh.rotation = Quaternion.Slerp(bodyMesh.rotation, targetRotation, Time.deltaTime * tiltSpeed);
         }
     }
-    bool IsOppositeTeamStepping(int myTeam)
-    {
-        foreach (Leg leg in legs)
-        {
-            if (leg.team != myTeam && leg.isStepping)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
+    //bool IsOppositeTeamStepping(int myTeam)
+    //{
+    //    foreach (Leg leg in legs)
+    //    {
+    //        if (leg.team != myTeam && leg.isStepping)
+    //        {
+    //            return true;
+    //        }
+    //    }
+    //    return false;
+    //}
 
     //IEnumerator PerformStep(Leg leg, bool isMoving)
     //{
@@ -239,9 +333,9 @@ public class ProceduralLeg : MonoBehaviour
                 Vector3 rayCastOrigin = leg.idealFootPos.position + (Vector3.up * raycastHeightOffset);
                 Vector3 SphereOrigin = leg.idealFootPos.position + (surfaceNormal * raycastHeightOffset);
                 Vector3 forwardOrigin = transform.position + (surfaceNormal * 0.5f);
+
                 Gizmos.DrawLine(rayCastOrigin, rayCastOrigin + (-normal * raycastDistance));
                 Gizmos.DrawWireSphere(forwardOrigin, bodyRadius);
-
                 Gizmos.DrawWireSphere(SphereOrigin, sphereRadius);
             }
         }
