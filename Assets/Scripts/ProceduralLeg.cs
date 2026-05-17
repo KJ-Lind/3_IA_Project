@@ -113,6 +113,8 @@ public class ProceduralLeg : MonoBehaviour
             }
 
             float easedT = stepEasing.Evaluate(legs[i].stepProgress);
+            legs[i].stepEndPos = legs[i].currentGroundTarget;
+
             Vector3 currentPos = Vector3.Lerp(legs[i].stepStartPos, legs[i].stepEndPos, easedT);
 
             // Apply the CACHED step height for this specific step
@@ -159,7 +161,6 @@ public class ProceduralLeg : MonoBehaviour
             {
                 legs[i].currentGroundTarget = hit.point;
             }
-
             float distance = Vector3.Distance(legs[i].ikTarget.position, legs[i].currentGroundTarget);
 
             bool wantsStep = false;
@@ -241,9 +242,6 @@ public class ProceduralLeg : MonoBehaviour
     {
         if (bodyMesh == null || legs.Length == 0) return;
 
-        float speedMultiplier = currentBodySpeed > 0.1f ? Mathf.Clamp(currentBodySpeed, 1.0f, 5.0f) : 1.0f;
-        float dynamicTiltSpeed = tiltSpeed * speedMultiplier;
-
         Vector3 avgFootPos = Vector3.zero;
         foreach (Leg leg in legs)
         {
@@ -252,7 +250,7 @@ public class ProceduralLeg : MonoBehaviour
         avgFootPos /= legs.Length;
 
         Vector3 targetPosition = avgFootPos + surfaceNormal * bodyHeight;
-        bodyMesh.position = Vector3.Lerp(bodyMesh.position, targetPosition, Time.deltaTime * dynamicTiltSpeed);
+        bodyMesh.position = Vector3.Lerp(bodyMesh.position, targetPosition, Time.deltaTime * tiltSpeed);
 
         Vector3 projectedForward = Vector3.ProjectOnPlane(transform.forward, surfaceNormal).normalized;
 
@@ -278,49 +276,6 @@ public class ProceduralLeg : MonoBehaviour
             bodyMesh.rotation = Quaternion.Slerp(bodyMesh.rotation, targetRotation, Time.deltaTime * tiltSpeed);
         }
     }
-    //bool IsOppositeTeamStepping(int myTeam)
-    //{
-    //    foreach (Leg leg in legs)
-    //    {
-    //        if (leg.team != myTeam && leg.isStepping)
-    //        {
-    //            return true;
-    //        }
-    //    }
-    //    return false;
-    //}
-
-    //IEnumerator PerformStep(Leg leg, bool isMoving)
-    //{
-    //    leg.isStepping = true;
-    //    Vector3 startPos = leg.ikTarget.position;
-
-    //    // We always target the latest ground hit
-    //    Vector3 endPos = leg.currentGroundTarget;
-
-    //    float timeElapsed = 0;
-    //    float speedMultiplier = isMoving ? Mathf.Clamp(currentBodySpeed, 1f, 10f) : 1f;
-    //    float dynamicStepDuration = baseStepDuration / speedMultiplier;
-
-    //    while (timeElapsed < dynamicStepDuration)
-    //    {
-    //        float t = timeElapsed / dynamicStepDuration;
-    //        float easedT = stepEasing.Evaluate(t);
-
-    //        // Note: During rotation, 'leg.currentGroundTarget' is moving every frame. 
-    //        // To prevent the foot from "sliding" while in the air, we Lerp to the target 
-    //        // detected at the START of the step, or update it slightly.
-    //        Vector3 currentPos = Vector3.Lerp(startPos, endPos, easedT);
-    //        currentPos += surfaceNormal * (Mathf.Sin(easedT * Mathf.PI) * stepHeight);
-
-    //        leg.ikTarget.position = currentPos;
-    //        timeElapsed += Time.deltaTime;
-    //        yield return null;
-    //    }
-
-    //    leg.ikTarget.position = leg.currentGroundTarget;
-    //    leg.isStepping = false;
-    //}
     private void OnDrawGizmos()
     {
         if (legs == null) return;
@@ -364,6 +319,6 @@ public class ProceduralLeg : MonoBehaviour
             targetNormal = downHit.normal;
         }
 
-        surfaceNormal = Vector3.Lerp(surfaceNormal, targetNormal, Time.deltaTime * gravityAlignSpeed).normalized;
+        surfaceNormal = Vector3.Slerp(surfaceNormal, targetNormal, Time.deltaTime * gravityAlignSpeed).normalized;
     }
 }
