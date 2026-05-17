@@ -687,13 +687,13 @@ MonoBehaviour:
     m_Bits: 8
   raycastHeightOffset: 5
   raycastDistance: 6
-  sphereRadius: 1.5
+  sphereRadius: 1
   bodyMesh: {fileID: 405705811}
-  bodyHeight: 1
-  tiltSpeed: 1.5
-  lookaheadDistance: 1.5
+  bodyHeight: 1.5
+  tiltSpeed: 3
+  lookaheadDistance: 2
   bodyRadius: 2.5
-  gravityAlignSpeed: 5
+  gravityAlignSpeed: 15
   bankMultiplier: 0.2
   maxBankAngle: 15
   bankSmoothSpeed: 8
@@ -709,7 +709,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c41f69fe6b04e364aaa083d39f2b3901, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SpiderController
-  moveSpeed: 15
+  moveSpeed: 10
   turnSpeed: 150
 --- !u!54 &405705816
 Rigidbody:
